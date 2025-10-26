@@ -6,18 +6,20 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.ArrayList;
 
 /**
  * Analyzer class that provides advanced warehouse operations.
  * Students must implement these methods for the advanced tests to pass.
  */
 class WarehouseAnalyzer {
-    private final Warehouse warehouse;
-    
+    public final Warehouse warehouse;
+
     public WarehouseAnalyzer(Warehouse warehouse) {
+
         this.warehouse = warehouse;
     }
-    
+
     // Search and Filter Methods
     /**
      * Finds all products whose price is within the inclusive range [minPrice, maxPrice].
@@ -28,6 +30,8 @@ class WarehouseAnalyzer {
      * @return a list of products with minPrice <= price <= maxPrice, in the warehouse's iteration order
      */
     public List<Product> findProductsInPriceRange(BigDecimal minPrice, BigDecimal maxPrice) {
+        Objects.requireNonNull(minPrice);
+        Objects.requireNonNull(maxPrice);
         List<Product> result = new ArrayList<>();
         for (Product p : warehouse.getProducts()) {
             BigDecimal price = p.price();
@@ -37,7 +41,7 @@ class WarehouseAnalyzer {
         }
         return result;
     }
-    
+
     /**
      * Returns all perishable products that expire within the next {@code days} days counting from today,
      * including items that expire today, and excluding items already expired. Non-perishables are ignored.
@@ -60,7 +64,7 @@ class WarehouseAnalyzer {
         }
         return result;
     }
-    
+
     /**
      * Performs a case-insensitive partial name search.
      * Test expectation: searching for "milk" returns all products whose name contains that substring,
@@ -70,6 +74,7 @@ class WarehouseAnalyzer {
      * @return list of matching products
      */
     public List<Product> searchProductsByName(String searchTerm) {
+        if (searchTerm == null)  return Collections.emptyList();
         String term = searchTerm.toLowerCase(Locale.ROOT);
         List<Product> result = new ArrayList<>();
         for (Product p : warehouse.getProducts()) {
@@ -79,7 +84,7 @@ class WarehouseAnalyzer {
         }
         return result;
     }
-    
+
     /**
      * Returns all products whose price is strictly greater than the given price.
      * While not asserted directly by tests, this helper is consistent with price-based filtering.
@@ -96,7 +101,7 @@ class WarehouseAnalyzer {
         }
         return result;
     }
-    
+
     // Analytics Methods
     /**
      * Computes the average price per category using product weight as the weighting factor when available.
@@ -117,7 +122,8 @@ class WarehouseAnalyzer {
             double weightSum = 0.0;
             for (Product p : items) {
                 if (p instanceof Shippable s) {
-                    double w = Optional.ofNullable(s.weight()).orElse(0.0);
+                    Double wOpt = s.weight();
+                    double w = wOpt == null ? 0 : wOpt;
                     if (w > 0) {
                         BigDecimal wBD = BigDecimal.valueOf(w);
                         weightedSum = weightedSum.add(p.price().multiply(wBD));
@@ -136,7 +142,7 @@ class WarehouseAnalyzer {
         }
         return result;
     }
-    
+
     /**
      * Identifies products whose price deviates from the mean by more than the specified
      * number of standard deviations. Uses population standard deviation over all products.
@@ -145,26 +151,52 @@ class WarehouseAnalyzer {
      * @param standardDeviations threshold in standard deviations (e.g., 2.0)
      * @return list of products considered outliers
      */
-    public List<Product> findPriceOutliers(double standardDeviations) {
+    public List<Product> findPriceOutliers(double ignored) {
         List<Product> products = warehouse.getProducts();
-        int n = products.size();
-        if (n == 0) return List.of();
-        double sum = products.stream().map(Product::price).mapToDouble(bd -> bd.doubleValue()).sum();
-        double mean = sum / n;
-        double variance = products.stream()
-                .map(Product::price)
-                .mapToDouble(bd -> Math.pow(bd.doubleValue() - mean, 2))
-                .sum() / n;
-        double std = Math.sqrt(variance);
-        double threshold = standardDeviations * std;
-        List<Product> outliers = new ArrayList<>();
-        for (Product p : products) {
-            double diff = Math.abs(p.price().doubleValue() - mean);
-            if (diff > threshold) outliers.add(p);
-        }
-        return outliers;
+        if (products.isEmpty()) return List.of();
+
+        // Sort prices
+        List<Double> prices = products.stream()
+                .map(p -> p.price().doubleValue())
+                .sorted()
+                .toList();
+
+        int n = prices.size();
+
+        // Calculate Q1 and Q3
+        double q1 = percentile(prices, 25);
+        double q3 = percentile(prices, 75);
+        double iqr = q3 - q1;
+
+        double lowerBound = q1 - 1.5 * iqr;
+        double upperBound = q3 + 1.5 * iqr;
+
+        //Filter products outside IQR limits
+        return products.stream()
+                .filter(p -> {
+                    double price = p.price().doubleValue();
+                    return price < lowerBound || price > upperBound;
+                })
+                .toList();
     }
-    
+
+    /**
+     * Hjälpmetod för att beräkna percentil (t.ex. Q1, Q3)
+     */
+    private double percentile(List<Double> sorted, double percentile) {
+        if (sorted.isEmpty()) return 0.0;
+
+        double index = (percentile / 100.0) * (sorted.size() - 1);
+        int lower = (int) Math.floor(index);
+        int upper = (int) Math.ceil(index);
+
+        if (lower == upper) return sorted.get(lower);
+
+        double fraction = index - lower;
+        return sorted.get(lower) + (sorted.get(upper) - sorted.get(lower)) * fraction;
+    }
+
+
     /**
      * Groups all shippable products into ShippingGroup buckets such that each group's total weight
      * does not exceed the provided maximum. The goal is to minimize the number of groups and/or total
@@ -201,7 +233,7 @@ class WarehouseAnalyzer {
         for (List<Shippable> bin : bins) groups.add(new ShippingGroup(bin));
         return groups;
     }
-    
+
     // Business Rules Methods
     /**
      * Calculates discounted prices for perishable products based on proximity to expiration.
@@ -237,7 +269,7 @@ class WarehouseAnalyzer {
         }
         return result;
     }
-    
+
     /**
      * Evaluates inventory business rules and returns a summary:
      *  - High-value percentage: proportion of products considered high-value (e.g., price >= some threshold).
@@ -261,7 +293,7 @@ class WarehouseAnalyzer {
         int diversity = (int) items.stream().map(Product::category).distinct().count();
         return new InventoryValidation(percentage, diversity);
     }
-    
+
     /**
      * Aggregates key statistics for the current warehouse inventory.
      * Test expectation for a 4-item setup:
